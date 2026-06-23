@@ -22,6 +22,10 @@ RUN mkdir -p /opt/factory/.factory /opt/factory/repos /opt/factory/trash \
 
 USER factory
 
+# 容器内监听 0.0.0.0 以支持 Docker 端口映射
+# 宿主机直接运行时可覆盖为 127.0.0.1（不对外暴露）
+ENV FACTORY_BIND_HOST=0.0.0.0
+
 EXPOSE 34567
 
 CMD ["python", "agent.py"]
