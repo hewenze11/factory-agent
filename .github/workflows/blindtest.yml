@@ -18,6 +18,11 @@ jobs:
           sudo systemctl restart docker
           docker info | grep -i insecure || true
 
+      - name: Login to Harbor
+        run: |
+          echo "${{ secrets.HARBOR_TOOL_PASSWORD }}" | docker login 172.236.254.239:30880 \
+            -u "${{ secrets.HARBOR_TOOL_USER }}" --password-stdin
+
       - name: Install deps
         run: |
           set -euxo pipefail
