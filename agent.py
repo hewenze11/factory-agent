@@ -7,6 +7,7 @@ agent.py - AI 软件工厂 用户服务器 Agent 主入口
 - 监听 127.0.0.1:{port}，默认 34567，顺序探测 34567-34577 找可用端口
 """
 
+import base64
 import json
 import logging
 import os
@@ -156,11 +157,32 @@ def handle_write(environ, start_response, project_id: str):
         return _error(start_response, 400, str(e))
 
     files = body.get("files")
+    # 兼容单文件格式：{"path": "...", "content": "..."} 或 {"path": "...", "content_b64": "..."}
+    if files is None and ("path" in body):
+        entry = {"path": body["path"]}
+        if "content_b64" in body or "content_base64" in body:
+            entry["content_b64"] = body.get("content_b64") or body.get("content_base64")
+        else:
+            entry["content"] = body.get("content", "")
+        files = [entry]
     if not isinstance(files, list):
-        return _error(start_response, 400, "'files' must be a list")
+        return _error(start_response, 400, "'files' must be a list, or provide 'path'+'content'/'content_b64'")
+
+    # 解码 content_b64/content_base64 → content（repo_write 只接受 str）
+    decoded_files = []
+    for item in files:
+        if "content_b64" in item or "content_base64" in item:
+            b64 = item.get("content_b64") or item.get("content_base64")
+            try:
+                content = base64.b64decode(b64).decode("utf-8")
+            except Exception as exc:
+                return _error(start_response, 400, f"Invalid base64 content: {exc}")
+            decoded_files.append({"path": item.get("path", ""), "content": content})
+        else:
+            decoded_files.append(item)
 
     try:
-        result = factory_repo.repo_write(project_id, files)
+        result = factory_repo.repo_write(project_id, decoded_files)
         return _json_response(start_response, "200 OK", result)
     except OverflowError as e:
         return _error(start_response, 413, str(e))
