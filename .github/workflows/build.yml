@@ -1,0 +1,47 @@
+name: Build & Push Agent Image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  HARBOR: 172.236.254.239:30880
+  IMAGE: 172.236.254.239:30880/factory/agent
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure insecure registry
+        run: |
+          sudo mkdir -p /etc/docker
+          echo '{"insecure-registries":["172.236.254.239:30880"]}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+          sleep 3
+
+      - name: Login to Harbor (tool registry)
+        run: |
+          echo "${{ secrets.HARBOR_TOOL_PASSWORD }}" | docker login 172.236.254.239:30880 \
+            -u "${{ secrets.HARBOR_TOOL_USER }}" --password-stdin
+
+      - name: Build & push
+        run: |
+          TAG="${{ github.ref_name }}-${{ github.sha }}"
+          SHORT="${{ github.ref_name }}-${GITHUB_SHA::7}"
+          docker build -t "$IMAGE:$SHORT" -t "$IMAGE:latest" .
+          docker push "$IMAGE:$SHORT"
+          docker push "$IMAGE:latest"
+          echo "IMAGE_TAG=$SHORT" >> $GITHUB_ENV
+
+      - name: Notify Feishu
+        if: always()
+        run: |
+          STATUS="${{ job.status }}"
+          COLOR=$([[ "$STATUS" == "success" ]] && echo "green" || echo "red")
+          curl -s -X POST \
+            "https://open.feishu.cn/open-apis/bot/v2/hook/f5863f4d-4f8f-41e6-8361-ee3a16672099" \
+            -H "Content-Type: application/json" \
+            -d "{\"msg_type\":\"text\",\"content\":{\"text\":\"[factory-agent] Build $STATUS\\nTag: ${IMAGE_TAG:-unknown}\\nCommit: ${{ github.sha }}\"}}"
