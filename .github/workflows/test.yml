@@ -1,0 +1,140 @@
+name: Integration Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure insecure registry
+        run: |
+          sudo mkdir -p /etc/docker
+          echo '{"insecure-registries":["172.236.254.239:30880"]}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+          sleep 3
+
+      - name: Login to Harbor
+        run: |
+          echo "${{ secrets.HARBOR_TOOL_PASSWORD }}" | docker login 172.236.254.239:30880 \
+            -u "${{ secrets.HARBOR_TOOL_USER }}" --password-stdin
+
+      - name: Pull latest agent image
+        run: docker pull 172.236.254.239:30880/factory/agent:latest
+
+      - name: Start agent container
+        run: |
+          docker run -d \
+            --name factory-agent-test \
+            -p 34567:34567 \
+            -e FACTORY_API_BASE=http://httpbin.org \
+            -e FACTORY_PRODUCT_ID=test \
+            172.236.254.239:30880/factory/agent:latest
+          sleep 3
+          docker logs factory-agent-test
+
+      - name: Test 1 - Health check (token auth)
+        run: |
+          # Agent启动后会生成token，从日志里拿
+          TOKEN=$(docker exec factory-agent-test cat /data/agent_token.txt 2>/dev/null || echo "")
+          if [ -z "$TOKEN" ]; then
+            echo "FAIL: token file not found"
+            docker logs factory-agent-test
+            exit 1
+          fi
+          echo "TOKEN: ${TOKEN:0:8}..."
+
+          # 无token应返回403
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:34567/health)
+          if [ "$CODE" != "403" ]; then
+            echo "FAIL: expected 403 without token, got $CODE"
+            exit 1
+          fi
+          echo "PASS: unauthenticated returns 403"
+
+          # 有token应返回200
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "X-Agent-Token: $TOKEN" http://localhost:34567/health)
+          if [ "$CODE" != "200" ]; then
+            echo "FAIL: expected 200 with token, got $CODE"
+            exit 1
+          fi
+          echo "PASS: authenticated health check 200"
+
+      - name: Test 2 - Repo init
+        run: |
+          TOKEN=$(docker exec factory-agent-test cat /data/agent_token.txt)
+          RESP=$(curl -s -X POST http://localhost:34567/repo/init \
+            -H "X-Agent-Token: $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"project_id":"test-proj-001"}')
+          echo "init response: $RESP"
+          echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('ok')==True, f'FAIL: {d}'; print('PASS: repo init ok')"
+
+      - name: Test 3 - Write file
+        run: |
+          TOKEN=$(docker exec factory-agent-test cat /data/agent_token.txt)
+          CONTENT=$(echo '{"key":"value"}' | base64)
+          RESP=$(curl -s -X POST http://localhost:34567/repo/write \
+            -H "X-Agent-Token: $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"project_id\":\"test-proj-001\",\"path\":\"src/config.json\",\"content_b64\":\"$CONTENT\",\"message\":\"add config\"}")
+          echo "write response: $RESP"
+          echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('ok')==True, f'FAIL: {d}'; print('PASS: write ok, commit=' + d.get('commit_hash','?')[:8])"
+
+      - name: Test 4 - Path traversal rejected
+        run: |
+          TOKEN=$(docker exec factory-agent-test cat /data/agent_token.txt)
+          CONTENT=$(echo 'evil' | base64)
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:34567/repo/write \
+            -H "X-Agent-Token: $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"project_id\":\"test-proj-001\",\"path\":\"../../../etc/passwd\",\"content_b64\":\"$CONTENT\",\"message\":\"evil\"}")
+          if [ "$CODE" != "400" ]; then
+            echo "FAIL: path traversal should return 400, got $CODE"
+            exit 1
+          fi
+          echo "PASS: path traversal rejected (400)"
+
+      - name: Test 5 - Commit log
+        run: |
+          TOKEN=$(docker exec factory-agent-test cat /data/agent_token.txt)
+          RESP=$(curl -s "http://localhost:34567/repo/log?project_id=test-proj-001&limit=5" \
+            -H "X-Agent-Token: $TOKEN")
+          echo "log response: $RESP"
+          echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); assert isinstance(d.get('commits'), list) and len(d['commits'])>0, f'FAIL: {d}'; print('PASS: log ok, commits=' + str(len(d['commits'])))"
+
+      - name: Test 6 - Export zip (streaming)
+        run: |
+          TOKEN=$(docker exec factory-agent-test cat /data/agent_token.txt)
+          HTTP_CODE=$(curl -s -o /tmp/export.zip -w "%{http_code}" \
+            "http://localhost:34567/repo/export?project_id=test-proj-001&format=cursor" \
+            -H "X-Agent-Token: $TOKEN")
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "FAIL: export returned $HTTP_CODE"
+            exit 1
+          fi
+          SIZE=$(wc -c < /tmp/export.zip)
+          echo "PASS: export zip size=$SIZE bytes"
+          # 验证是合法zip
+          python3 -c "import zipfile; z=zipfile.ZipFile('/tmp/export.zip'); print('PASS: valid zip, files=' + str(len(z.namelist())))"
+
+      - name: Collect logs on failure
+        if: failure()
+        run: docker logs factory-agent-test
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f factory-agent-test 2>/dev/null || true
+
+      - name: Notify Feishu
+        if: always()
+        run: |
+          STATUS="${{ job.status }}"
+          curl -s -X POST \
+            "https://open.feishu.cn/open-apis/bot/v2/hook/f5863f4d-4f8f-41e6-8361-ee3a16672099" \
+            -H "Content-Type: application/json" \
+            -d "{\"msg_type\":\"text\",\"content\":{\"text\":\"[factory-agent] Integration Test $STATUS\\n6项验收测试\"}}"
