@@ -91,7 +91,7 @@ get_token() {
     local path
     path=$(echo "$logs" | sed -nE 's/.*Generated new token at[[:space:]]+([^\r\n]+).*/\1/p' | tail -n1)
     if [[ -n "$path" ]]; then
-      info "Token path from logs: $path"
+      info "Token path from logs: $path" >&2   # must go to stderr, not stdout (TOKEN=$(get_token) captures stdout)
       # read file inside container
       local token
       token=$(docker exec "$CONTAINER" sh -lc "cat '$path'" 2>/dev/null | tr -d '\r\n' || true)
@@ -251,11 +251,6 @@ else
   fail "7) Expected 401 without token, got ${code} (url: $EP_LOG)"
 fi
 
-# -------- DEBUG --------
-info "DEBUG: TOKEN=${TOKEN:0:12}... EP_INIT=$EP_INIT"
-_debug_body=$(curl -sS -X POST "$EP_INIT" -H "Authorization: Bearer ${TOKEN}" 2>&1 || true)
-_debug_code=$(curl -sS -o /dev/null -w "%{http_code}" -X POST "$EP_INIT" -H "Authorization: Bearer ${TOKEN}" 2>&1 || echo "000")
-info "DEBUG: init body=$_debug_body code=$_debug_code"
 # -------- 1. init idempotent --------
 code1=$(http_code POST "$EP_INIT" -H "Authorization: Bearer ${TOKEN}")
 code2=$(http_code POST "$EP_INIT" -H "Authorization: Bearer ${TOKEN}")
