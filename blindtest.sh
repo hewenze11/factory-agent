@@ -252,13 +252,8 @@ else
 fi
 
 # -------- 1. init idempotent --------
-# Debug: capture response body for diagnosis
-init_body1=$(curl -sS -X POST "$EP_INIT" -H "Authorization: Bearer ${TOKEN}" || true)
-code1=$(curl -sS -o /dev/null -w "%{http_code}" -X POST "$EP_INIT" -H "Authorization: Bearer ${TOKEN}" || echo "000")
-code2=$(curl -sS -o /dev/null -w "%{http_code}" -X POST "$EP_INIT" -H "Authorization: Bearer ${TOKEN}" || echo "000")
-info "DEBUG init body: $init_body1"
-info "DEBUG EP_INIT: $EP_INIT"
-info "DEBUG REPO_ID: $REPO_ID TOKEN_PREFIX: ${TOKEN:0:8}..."
+code1=$(http_code POST "$EP_INIT" -H "Authorization: Bearer ${TOKEN}")
+code2=$(http_code POST "$EP_INIT" -H "Authorization: Bearer ${TOKEN}")
 if [[ "$code1" =~ ^2 && "$code2" =~ ^2 ]]; then
   pass "1) POST /repo/{id}/init is idempotent (${code1}, ${code2})"
 else
