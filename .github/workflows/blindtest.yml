@@ -39,6 +39,23 @@ jobs:
           chmod +x ./blindtest.sh
           ./blindtest.sh
 
+      - name: Export diagnostic on failure
+        if: failure()
+        run: |
+          echo "=== Container logs ==="
+          docker logs factory-agent-test 2>&1 || true
+          echo "=== Export test ==="
+          TOKEN=$(docker exec factory-agent-test cat /opt/factory/.factory/agent.token 2>/dev/null || echo "")
+          if [[ -n "$TOKEN" ]]; then
+            REPOS=$(docker exec factory-agent-test ls /opt/factory/repos/ 2>/dev/null || echo "")
+            echo "Repos: $REPOS"
+            for REPO in $REPOS; do
+              echo "Export body for $REPO:"
+              curl -sS "http://127.0.0.1:34567/repo/$REPO/export?format=zip" \
+                -H "Authorization: Bearer $TOKEN" -o /tmp/e.zip -w "%{http_code}" || true
+            done
+          fi
+
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
