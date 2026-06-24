@@ -251,6 +251,11 @@ else
   fail "7) Expected 401 without token, got ${code} (url: $EP_LOG)"
 fi
 
+# -------- DEBUG --------
+info "DEBUG: TOKEN=${TOKEN:0:12}... EP_INIT=$EP_INIT"
+_debug_body=$(curl -sS -X POST "$EP_INIT" -H "Authorization: Bearer ${TOKEN}" 2>&1 || true)
+_debug_code=$(curl -sS -o /dev/null -w "%{http_code}" -X POST "$EP_INIT" -H "Authorization: Bearer ${TOKEN}" 2>&1 || echo "000")
+info "DEBUG: init body=$_debug_body code=$_debug_code"
 # -------- 1. init idempotent --------
 code1=$(http_code POST "$EP_INIT" -H "Authorization: Bearer ${TOKEN}")
 code2=$(http_code POST "$EP_INIT" -H "Authorization: Bearer ${TOKEN}")
