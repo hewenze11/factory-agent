@@ -2,12 +2,13 @@
 repo.py - Git 操作：init / write / commit / log / export / delete
 """
 
+import io
 import json
 import logging
 import os
 import shutil
 import time
-import zipfile  # 仅用于 ZIP_DEFLATED 常量
+import zipfile
 from typing import Generator
 
 import git  # gitpython

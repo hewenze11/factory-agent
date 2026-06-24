@@ -220,8 +220,9 @@ def handle_commit(environ, start_response, project_id: str):
         return _error(start_response, 400, str(e))
 
     message = body.get("message", "")
-    if not isinstance(message, str) or not message.strip():
-        return _error(start_response, 400, "'message' must be a non-empty string")
+    if not isinstance(message, str):
+        return _error(start_response, 400, "'message' must be a string")
+    # 允许空 message，repo_commit 会使用默认值 "update"
 
     try:
         result = factory_repo.repo_commit(project_id, message)
