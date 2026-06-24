@@ -118,7 +118,23 @@ def repo_write(project_id: str, files: list[dict]) -> dict:
         written.append(os.path.relpath(abs_path, repo_dir))
 
     logger.info("repo_write: wrote %d files to %s", len(written), project_id)
-    return {"status": "ok", "written": len(written)}
+
+    # 自动提交（write 写完即 commit，减少调用方负担）
+    repo = _open_repo(project_id)
+    repo.git.add(A=True)
+    with repo.config_writer() as cfg:
+        if not cfg.has_option("user", "email"):
+            cfg.set_value("user", "email", "factory-agent@cayan.ai")
+        if not cfg.has_option("user", "name"):
+            cfg.set_value("user", "name", "Factory Agent")
+    # 只有在有变更时才 commit
+    if repo.is_dirty(untracked_files=True):
+        commit_msg = f"write: {len(written)} file(s)"
+        commit = repo.index.commit(commit_msg)
+        logger.info("repo_write: auto-committed %s", commit.hexsha[:8])
+        return {"status": "ok", "written": len(written), "commit_hash": commit.hexsha}
+    else:
+        return {"status": "ok", "written": len(written), "commit_hash": None}
 
 
 def repo_commit(project_id: str, message: str) -> dict:

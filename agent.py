@@ -88,8 +88,11 @@ def _error(start_response, code: int, message: str) -> list[bytes]:
     return _json_response(start_response, status, {"error": message})
 
 
-def _read_body(environ, max_bytes: int = 11 * 1024 * 1024) -> bytes:
-    """读取 request body，最多 max_bytes。"""
+_MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MB 请求体上限
+
+
+def _read_body(environ, max_bytes: int = _MAX_BODY_BYTES) -> bytes:
+    """读取 request body，超过 max_bytes 抛 OverflowError（调用方返回 413）。"""
     try:
         length = int(environ.get("CONTENT_LENGTH") or 0)
     except ValueError:
@@ -99,7 +102,19 @@ def _read_body(environ, max_bytes: int = 11 * 1024 * 1024) -> bytes:
     wsgi_input = environ.get("wsgi.input")
     if wsgi_input is None:
         return b""
-    return wsgi_input.read(min(length, max_bytes))
+    # 流式读取，防止 chunked/未声明 Content-Length 时绕过上限
+    chunks = []
+    remaining = max_bytes + 1
+    while remaining > 0:
+        chunk = wsgi_input.read(min(8192, remaining))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    data = b"".join(chunks)
+    if len(data) > max_bytes:
+        raise OverflowError(f"Request body too large: {len(data)} > {max_bytes}")
+    return data
 
 
 def _parse_json_body(environ) -> dict:
@@ -264,13 +279,10 @@ def handle_export(environ, start_response, project_id: str):
 @_route(rf"^/repo/(?P<project_id>{_PROJECT_ID_RE})$", "DELETE")
 def handle_delete(environ, start_response, project_id: str):
     try:
-        deleted = factory_repo.repo_delete(project_id)
-        if deleted:
-            return _json_response(start_response, "200 OK", {"status": "ok", "deleted": True})
-        else:
-            # 幂等：已不存在
-            start_response("204 No Content", [])
-            return [b""]
+        factory_repo.repo_delete(project_id)
+        # 幂等：无论是否存在，统一返回 204 No Content
+        start_response("204 No Content", [])
+        return [b""]
     except ValueError as e:
         return _error(start_response, 400, str(e))
     except Exception as e:
