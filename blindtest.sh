@@ -159,9 +159,11 @@ PY
   fi
 
   # attempt 2: content
+  local content_json
+  content_json=$(printf '%s' "$content" | jq -Rs .)
   resp=$(curl -sS -D - -o "$WORKDIR/write_resp.json" -X POST "$url" \
     -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" \
-    --data-binary "{\"path\":\"${path}\",\"content\":${(printf '%s' "$content" | jq -Rs .)} }" || true)
+    --data-binary "{\"path\":\"${path}\",\"content\":${content_json}}" || true)
   code=$(echo "$resp" | awk 'NR==1{print $2}')
   if [[ "$code" =~ ^2 ]]; then
     echo "json_text"; return 0
@@ -382,12 +384,11 @@ fi
 
 # -------- 11. write >10MB returns 413 --------
 BIG_PATH="$WORKDIR/big.bin"
-python3 - <<'PY'
-import os
-p=os.environ['BIG_PATH']
-with open(p,'wb') as f:
-    f.write(b'a'*(10*1024*1024 + 1))
-PY
+python3 -c "
+import sys
+with open(sys.argv[1], 'wb') as f:
+    f.write(b'a' * (10 * 1024 * 1024 + 1))
+" "$BIG_PATH"
 # try multipart for big to avoid json overhead
 code=$(http_code POST "$EP_WRITE" -H "Authorization: Bearer ${TOKEN}" \
   -F "path=big.bin" -F "file=@${BIG_PATH}")
