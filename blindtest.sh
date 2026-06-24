@@ -411,7 +411,8 @@ fi
 # In GitHub Actions we are NOT on the same LAN as 172.236.254.239, so this check is best-effort.
 # We'll attempt and treat a connection failure / non-2xx as PASS, but a 2xx would be FAIL.
 code=$(http_code GET "${BASE_LAN}${PREFIX}/repo/${REPO_ID}/log" -H "Authorization: Bearer ${TOKEN}")
-if [[ "$code" == "000" || "$code" == "401" || "$code" == "403" || "$code" == "404" || "$code" == "502" || "$code" == "503" ]]; then
+# "000000" can occur when curl exits non-zero AND the fallback "|| echo 000" appends a second "000"
+if [[ "$code" == "000" || "$code" == "000000" || "$code" == "401" || "$code" == "403" || "$code" == "404" || "$code" == "502" || "$code" == "503" ]]; then
   pass "9) External access appears refused/unreachable (code $code)"
 else
   # If it returned 2xx, that means it was reachable; if 5xx maybe still reachable.
