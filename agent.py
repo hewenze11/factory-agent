@@ -259,15 +259,15 @@ def handle_export(environ, start_response, project_id: str):
 
     zip_name = f"{project_id}.zip"
     try:
-        # repo_export 先做大小预检（内部抛 OverflowError），再流式生成
-        chunks = factory_repo.repo_export(project_id, commit_hash, fmt)
-        # 流式传输：不在内存中聚合全量数据，防止 200MB OOM
+        # 先完整生成 zip（repo_export 会预检大小，最大 200MB），
+        # 然后一次性返回，确保所有异常都在 try 块内被捕获
+        data = b"".join(factory_repo.repo_export(project_id, commit_hash, fmt))
         start_response("200 OK", [
             ("Content-Type", "application/zip"),
             ("Content-Disposition", f'attachment; filename="{zip_name}"'),
-            ("Transfer-Encoding", "chunked"),
+            ("Content-Length", str(len(data))),
         ])
-        return chunks  # Waitress 会迭代 generator 流式发送
+        return [data]
     except OverflowError as e:
         return _error(start_response, 413, str(e))
     except FileNotFoundError as e:
