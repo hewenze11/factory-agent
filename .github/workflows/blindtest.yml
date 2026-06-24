@@ -48,8 +48,14 @@ jobs:
           docker ps -a
           echo "--- Container logs ---"
           docker logs factory-agent-test
-          echo "--- Quick HTTP test ---"
+          echo "--- Quick HTTP test (no token, expect 401) ---"
           curl -sv http://127.0.0.1:34567/ 2>&1 || true
+          echo "--- Get token ---"
+          TOKEN=$(docker exec factory-agent-test cat /opt/factory/.factory/agent.token)
+          echo "TOKEN: ${TOKEN:0:8}..."
+          echo "--- Test init with token ---"
+          curl -sv -X POST http://127.0.0.1:34567/repo/diag001/init \
+            -H "Authorization: Bearer $TOKEN" 2>&1 || true
 
       - name: Run blind test
         env:
