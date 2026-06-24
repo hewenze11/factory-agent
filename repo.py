@@ -11,7 +11,6 @@ import zipfile  # 仅用于 ZIP_DEFLATED 常量
 from typing import Generator
 
 import git  # gitpython
-import zipstream  # zipstream-new: true streaming zip generation
 
 import trash_gc
 from path_utils import PathError, safe_join
@@ -143,7 +142,7 @@ def repo_commit(project_id: str, message: str) -> dict:
     提交所有变更，返回 {"commit_hash": "..."}
     """
     if not message or not message.strip():
-        raise ValueError("Commit message must not be empty")
+        message = "update"  # 默认提交信息，允许调用方不传 message
 
     repo = _open_repo(project_id)
 
@@ -241,37 +240,30 @@ def repo_export(
             )
         blobs.append(blob)
 
-    # 真正流式生成 zip（zipstream-new），逐 blob 写入后即时 yield，不聚合整个 zip 到内存
-    # zipstream-new API: zipstream.ZipFile（与标准库 zipfile.ZipFile 同接口），可迭代产出 bytes
-    zs = zipstream.ZipFile(mode="w", compression=zipstream.ZIP_DEFLATED, allowZip64=True)
+    # 生成 zip：先写入内存 BytesIO，再流式 yield 分块（已经通过大小预检，最大 200MB）
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+        # IDE 配置文件
+        if fmt == "cursor":
+            zf.writestr(".cursor/settings.json",
+                        json.dumps({"project": project_id}))
+        elif fmt == "idea":
+            zf.writestr(
+                f".idea/{project_id}.iml",
+                f'<?xml version="1.0"?>\n<module type="PYTHON_MODULE" version="4"/>\n'
+            )
+        # 写入所有 blob
+        for blob in blobs:
+            arc_name = f"{project_id}/{blob.path}"
+            zf.writestr(arc_name, blob.data_stream.read())
 
-    # IDE 配置文件（小文件，writestr 一次性写入可接受，zipstream-new 兼容标准库 API）
-    if fmt == "cursor":
-        zs.writestr(".cursor/settings.json",
-                    json.dumps({"project": project_id}).encode())
-    elif fmt == "idea":
-        zs.writestr(
-            f".idea/{project_id}.iml",
-            f'<?xml version="1.0"?>\n<module type="PYTHON_MODULE" version="4"/>\n'.encode()
-        )
-
-    # 逐 blob 写入：用 write_iter 流式喂数据，每个 blob 只在内存中临时放一份
-    def _blob_iter(b):
-        """将 blob 数据流转为 generator，支持 write_iter 流式写入。"""
-        chunk_size = 65536
-        stream = b.data_stream
-        while True:
-            chunk = stream.read(chunk_size)
-            if not chunk:
-                break
-            yield chunk
-
-    for blob in blobs:
-        arc_name = f"{project_id}/{blob.path}"
-        zs.write_iter(arc_name, _blob_iter(blob))
-
-    # 流式 yield 给 Waitress，每次产出一个 zip chunk
-    yield from zs
+    buf.seek(0)
+    # 分块 yield，不一次性返回全部数据
+    while True:
+        chunk = buf.read(65536)
+        if not chunk:
+            break
+        yield chunk
 
 
 def repo_delete(project_id: str) -> bool:
